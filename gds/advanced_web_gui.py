@@ -3,8 +3,14 @@ import serial.tools.list_ports
 import threading
 import time
 import json
+import logging
+from datetime import datetime
 from flask import Flask, render_template_string, request
 from flask_sock import Sock
+
+# --- Project Imports ---
+from telemetry_parser import TelemetryParser
+from data_logger import DataLogger
 
 # --- Configuration ---
 ARDUINO_VID_PIDS = [
@@ -14,19 +20,9 @@ ARDUINO_VID_PIDS = [
     (0x239A, 0x8022),  # Adafruit Feather M4 (if used as receiver)
 ]
 
-# --- 18-POINT DATA CONTRACT ---
-DATA_LABELS = [
-    "Pitch", "Roll", "Yaw",
-    "Altitude", "Velocity",
-    "Accel X", "Accel Y", "Accel Z",
-    "Pressure Pa", "IMU Temp C",
-    "GPS Fix", "GPS Sats",
-    "GPS Lat", "GPS Lon", "GPS Alt m", "GPS Speed m/s",
-    "VBat", "RSSI" 
-]
-
 # --- Global variables ---
-global_data = {label: "0.0" for label in DATA_LABELS}
+# We will initialize global_data in main() using the parser's labels
+global_data = {} 
 global_status = {
     "arduino_connected": False,
     "port": "Not Found"
@@ -34,7 +30,7 @@ global_status = {
 data_lock = threading.Lock()
 global_clients = []
 
-# --- Part 1: Serial Reader Thread (No changes) ---
+# --- Part 1: Serial Reader Thread (Reworked) ---
 
 def find_arduino_port():
     """Finds the GCS Receiver Arduino port."""
@@ -46,13 +42,28 @@ def find_arduino_port():
                 return port.device
     return None
 
-def serial_reader_thread(port):
+def serial_reader_thread(port: str, parser: TelemetryParser, datalogger: DataLogger, reverse_key_map: dict):
     """
-    Reads the 18-point CSV string from the GCS Receiver Arduino.
-    Reworked for robust error handling and connection retries.
+    Reads serial data, parses it, logs it, and prepares it for broadcast.
+    
+    Args:
+        port: The serial port name (or "NOT_FOUND").
+        parser: Instance of TelemetryParser.
+        datalogger: Instance of DataLogger.
+        reverse_key_map: A dict to map normalized keys (e.g., 'gps_lat')
+                         back to GUI labels (e.g., 'GPS Lat').
     """
     global global_data, global_status, global_clients
     while True: # Connection loop
+        if port == "NOT_FOUND":
+            print("Serial port not found. Retrying in 5 seconds...")
+            time.sleep(5)
+            port = find_arduino_port() or "NOT_FOUND"
+            if port != "NOT_FOUND":
+                with data_lock:
+                    global_status["port"] = port
+            continue
+
         print(f"Attempting to connect to serial port {port}...")
         ser = None
         try:
@@ -67,29 +78,39 @@ def serial_reader_thread(port):
                         if not line:
                             continue # Timeout, just read again
                         
-                        # --- Start of Parse/Broadcast Logic ---
                         line_str = line.decode('utf-8').strip()
                         if not line_str:
                             continue
 
-                        values = line_str.split(',')
-                        payload = None
+                        # 1. Parse the raw string using TelemetryParser
+                        parsed_telemetry = parser.parse(line_str)
                         
-                        # --- LOGIC FIX ---
-                        if len(values) == len(DATA_LABELS):
-                            with data_lock:
-                                for i, label in enumerate(DATA_LABELS):
-                                    global_data[label] = values[i]
-                                
-                                payload = json.dumps({
-                                    "type": "update",
-                                    "status": global_status, 
-                                    "data": global_data
-                                })
-                        else:
-                            continue # Skip this line, do not broadcast
+                        # 2. If parsing fails (returns None), skip this packet
+                        if not parsed_telemetry:
+                            logging.warning(f"Discarding bad packet: {line_str}")
+                            continue # Bad packet, silently ignore
 
-                        # --- Broadcast Logic ---
+                        # 3. Log the valid, structured data
+                        datalogger.write(parsed_telemetry)
+
+                        # 4. Update global_data for the GUI and build payload
+                        payload = None
+                        with data_lock:
+                            # Update global_data using the reverse map
+                            # This updates the data store that the websocket sends
+                            for key, value in parsed_telemetry.items():
+                                if key in reverse_key_map:
+                                    label = reverse_key_map[key]
+                                    global_data[label] = str(value) # GUI expects strings
+                            
+                            # Create payload
+                            payload = json.dumps({
+                                "type": "update",
+                                "status": global_status, 
+                                "data": global_data
+                            })
+                        
+                        # 5. Broadcast the payload (outside data_lock)
                         if payload: 
                             current_clients_copy = []
                             with data_lock:
@@ -107,19 +128,20 @@ def serial_reader_thread(port):
                                     for client in dead_clients:
                                         if client in global_clients:
                                             global_clients.remove(client)
-                        # --- End of Parse/Broadcast Logic ---
 
                     except serial.SerialException as e:
                         print(f"Serial error (disconnect?): {e}")
-                        break 
+                        port = "NOT_FOUND" # Trigger port re-find
+                        break # Break inner 'Read loop'
                     except UnicodeDecodeError:
-                        pass 
+                        pass # Garbled data, skip line
                     except Exception as e:
                         print(f"Unexpected error in read loop: {e}")
                         time.sleep(1) 
 
         except serial.SerialException as e:
             print(f"Serial connection error: {e}")
+            port = "NOT_FOUND" # Trigger port re-find
         except Exception as e:
             print(f"An unexpected error occurred in connection loop: {e}")
         finally:
@@ -524,7 +546,7 @@ HTML_TEMPLATE = """
         #data-fix-status { color: var(--red-accent); }
         #data-fix-status.locked { color: var(--status-connected); }
         
-        /* --- FIXED: Log Panel (Modal) --- */
+        /* --- Log Panel (Modal) --- */
         .log-overlay-bg {
             display: none; /* Hidden by default */
             position: fixed;
@@ -548,16 +570,13 @@ HTML_TEMPLATE = """
             max-width: 900px; /* Max width */
             z-index: 1005; 
             max-height: 60vh; /* Max height */
-            /* Use flex to manage inner scrolling */
             flex-direction: column;
             display: none; /* Hidden by default */
-            /* 'card' class in HTML provides bg, shadow, padding */
         }
         .log-panel.show {
             display: flex; /* Show as flex container */
         }
         
-        /* --- NEW: Close button for log --- */
         .log-close-btn {
             position: absolute;
             top: 10px;
@@ -734,6 +753,7 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
+        // All JavaScript is unchanged
         // --- Global State ---
         let chartObjects = {};
         let currentUpdateRate = 500;
@@ -1012,7 +1032,7 @@ HTML_TEMPLATE = """
             };
         }
 
-        // --- FIXED: window.onload ---
+        // --- window.onload (unchanged) ---
         window.onload = () => {
             initializeCharts();
             logToPanel("Dashboard initialized. Waiting for data...");
@@ -1023,13 +1043,11 @@ HTML_TEMPLATE = """
             const darkModeToggle = document.getElementById('dark-mode-toggle');
             const updateRateSelect = document.getElementById('update-rate');
             
-            // --- NEW: Log modal elements ---
             const logToggleBtn = document.getElementById('log-toggle-btn');
             const logPanel = document.getElementById('log-panel');
             const logCloseBtn = document.getElementById('log-close-btn');
             const logOverlay = document.getElementById('log-overlay-bg');
             
-            // --- Settings Dropdown Listeners (unchanged) ---
             settingsBtn.addEventListener('click', () => {
                 settingsDropdown.classList.toggle('show');
             });
@@ -1062,7 +1080,6 @@ HTML_TEMPLATE = """
             });
             currentUpdateRate = parseInt(updateRateSelect.value, 10);
             
-            // --- FIXED: Log Button Listeners ---
             function openLogModal() {
                 logPanel.classList.add('show');
                 logOverlay.classList.add('show');
@@ -1085,7 +1102,7 @@ HTML_TEMPLATE = """
             });
             
             logCloseBtn.addEventListener('click', closeLogModal);
-            logOverlay.addEventListener('click', closeLogModal); // Also close when clicking bg
+            logOverlay.addEventListener('click', closeLogModal); 
             
             // Start WebSocket connection
             connectWebSocket();
@@ -1146,7 +1163,6 @@ def ws(ws):
             if message is None: # Client sent a close frame
                 break
     except Exception as e:
-        #print(f"WebSocket client disconnected or error: {e}")
         pass # Client disconnected
     finally:
         # Clean up the client from the global list
@@ -1156,33 +1172,65 @@ def ws(ws):
         print("Client removed from list.")
 
 if __name__ == "__main__":
-    # 1. Find the GCS Receiver Arduino
+    # 1. Set up logging
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+    # 2. Initialize Parser
+    parser = TelemetryParser()
+    logging.info("TelemetryParser initialized.")
+
+    # 3. Initialize DataLogger
+    logger_config = {
+        'output_directory': './flight_data/',
+        'auto_create_directory': True,
+        'csv': {
+            'include_header': True,
+            'float_precision': 6
+        },
+        'buffer_size': 1 # Flush every write for real-time
+    }
+    datalogger = DataLogger(config=logger_config)
+    logging.info(f"DataLogger initialized. Logging to: {datalogger.get_current_file()}")
+
+    # 4. Create reverse map for GUI labels
+    # Maps 'gps_lat' -> 'GPS Lat'
+    reverse_key_map = {v: k for k, v in parser.key_map.items()}
+
+    # 5. Initialize global_data with default values from parser's labels
+    global_data = {label: "0.0" for label in parser.DATA_LABELS}
+
+    # 6. Find the GCS Receiver Arduino
     arduino_port = find_arduino_port()
     if not arduino_port:
-        print("Error: Could not find a GCS Receiver Arduino.")
-        print("Please check connection and ARDUINO_VID_PIDS list.")
+        logging.error("Could not find a GCS Receiver Arduino.")
+        logging.warning("Please check connection and ARDUINO_VID_PIDS list.")
         with data_lock:
             global_status["port"] = "Not Found"
-            
-        # Start the reader thread anyway, it will just loop and retry
-        print("Starting serial reader thread in retry-mode...")
-        reader = threading.Thread(target=serial_reader_thread, args=("NOT_FOUND",), daemon=True)
-        reader.start()
-        
+        arduino_port = "NOT_FOUND" # Set placeholder to retry
     else:
         with data_lock:
             global_status["port"] = arduino_port
-        
-        # 2. Start the serial reader thread
-        reader = threading.Thread(target=serial_reader_thread, args=(arduino_port,), daemon=True)
-        reader.start()
+    
+    # 7. Start the serial reader thread and pass instances
+    reader = threading.Thread(
+        target=serial_reader_thread, 
+        args=(arduino_port, parser, datalogger, reverse_key_map), 
+        daemon=True
+    )
+    reader.start()
 
-    # 3. Start the Flask web server
+    # 8. Start the Flask web server
     print("\n--- SlugSight Ground Station Server ---")
-    print(f"Open this URL in your browser: http://127.0.0.1:5500")
+    print(f"Open this URL in your browser: http://127.0.0.1:5200")
     print("-----------------------------------------------------")
     try:
-        app.run(host='0.0.0.0', port=5200, debug=False)
+        # --- THIS IS THE FIX ---
+        # Removed the 'allow_unsafe_werkzeug' argument
+        app.run(host='0.0.0.0', port=5300, debug=False)
     except KeyboardInterrupt:
         print("\nShutting down server...")
-
+    finally:
+        # Cleanly close the log file
+        print("Closing data logger...")
+        datalogger.close()
+        print("Shutdown complete.")

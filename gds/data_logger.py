@@ -43,7 +43,8 @@ class DataLogger:
         filename_base = timestamp.strftime(filename_format)
         
         self.current_filename = self.output_dir / f"{filename_base}.csv"
-        self.csv_file = open(self.current_filename, 'w', newline='')
+        # Open with explicit encoding for broader compatibility
+        self.csv_file = open(self.current_filename, 'w', newline='', encoding='utf-8')
         self.csv_writer = None  # Will be created when we know the fields
         logger.info(f"Logging to CSV: {self.current_filename}")
     
@@ -122,7 +123,7 @@ class DataLogger:
     
     def get_current_file(self) -> str:
         """Get path to current log file"""
-        return str(self.current_filename)
+        return str(self.current_filename) if self.current_filename else ""
 
 # Example usage
 if __name__ == "__main__":
