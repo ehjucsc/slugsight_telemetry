@@ -3,8 +3,19 @@ import serial.tools.list_ports
 import threading
 import time
 import json
+import logging
+from pathlib import Path
 from flask import Flask, render_template_string, request
 from flask_sock import Sock
+from telemetry_parser import TelemetryParser
+from data_logger import DataLogger
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 # --- Configuration ---
 # This list finds your RECEIVER Arduino (Uno, Nano, etc.)
@@ -36,6 +47,29 @@ global_status = {
 data_lock = threading.Lock()
 global_clients = []
 
+# --- Initialize Telemetry Parser and Data Logger ---
+parser_config = {
+    'validation': {
+        'enable_range_check': False  # Disable range checking for more permissive parsing
+    }
+}
+telemetry_parser = TelemetryParser(parser_config)
+
+# Data logger configuration
+logger_config = {
+    'output_directory': str(Path(__file__).parent / 'flight_data'),
+    'filename_format': 'slugsight_%Y%m%d_%H%M%S',
+    'auto_create_directory': True,
+    'csv': {
+        'delimiter': ',',
+        'include_header': True,
+        'float_precision': 6
+    },
+    'buffer_size': 10  # Flush to disk every 10 packets
+}
+data_logger = DataLogger(logger_config)
+logger.info(f"Data will be logged to: {data_logger.get_current_file()}")
+
 # --- Part 1: Serial Reader Thread ---
 
 def find_arduino_port():
@@ -44,20 +78,21 @@ def find_arduino_port():
     for port in ports:
         for vid, pid in ARDUINO_VID_PIDS:
             if port.vid == vid and port.pid == pid:
-                print(f"Found GCS Receiver on port: {port.device}")
+                logger.info(f"Found GCS Receiver on port: {port.device}")
                 return port.device
     return None
 
 def serial_reader_thread(port):
     """
     Reads the 18-point CSV string from the GCS Receiver Arduino.
+    Parses and logs telemetry data.
     """
     global global_data, global_status, global_clients
     while True:
         try:
             # Connect to the GCS Receiver Arduino
             with serial.Serial(port, 115200, timeout=1) as ser:
-                print(f"Serial connection to {port} established.")
+                logger.info(f"Serial connection to {port} established.")
                 while True:
                     line = ser.readline()
                     if not line:
@@ -68,52 +103,60 @@ def serial_reader_thread(port):
                         if not line_str:
                             continue
 
-                        values = line_str.split(',')
-
-                        payload = None
-                        with data_lock:
-                            global_status["arduino_connected"] = True
+                        # Parse the telemetry using TelemetryParser
+                        telemetry = telemetry_parser.parse(line_str)
                         
-                            # Check against the NEW 18-point contract
-                            if len(values) == len(DATA_LABELS):
-                                for i, label in enumerate(DATA_LABELS):
-                                    global_data[label] = values[i]
+                        if telemetry:
+                            # Log to CSV file
+                            data_logger.write(telemetry)
                             
-                            payload = json.dumps({
-                                "type": "update",
-                                "status": global_status,
-                                "data": global_data
-                            })
+                            # Update global data for web display
+                            payload = None
+                            with data_lock:
+                                global_status["arduino_connected"] = True
+                                
+                                # Convert telemetry dict back to display format
+                                for label in DATA_LABELS:
+                                    if label in telemetry:
+                                        global_data[label] = str(telemetry[label])
+                                
+                                payload = json.dumps({
+                                    "type": "update",
+                                    "status": global_status,
+                                    "data": global_data
+                                })
 
-                        # Push data to all clients
-                        if payload:
-                            dead_clients = []
-                            for client in global_clients:
-                                try:
-                                    client.send(payload)
-                                except Exception as e:
-                                    dead_clients.append(client)
-                            
-                            if dead_clients:
-                                with data_lock:
-                                    for client in dead_clients:
-                                        if client in global_clients:
-                                            global_clients.remove(client)
+                            # Push data to all clients
+                            if payload:
+                                dead_clients = []
+                                for client in global_clients:
+                                    try:
+                                        client.send(payload)
+                                    except Exception as e:
+                                        dead_clients.append(client)
+                                
+                                if dead_clients:
+                                    with data_lock:
+                                        for client in dead_clients:
+                                            if client in global_clients:
+                                                global_clients.remove(client)
 
                     except UnicodeDecodeError:
                         pass
+                    except Exception as e:
+                        logger.error(f"Error processing telemetry line: {e}")
 
         except serial.SerialException as e:
-            print(f"Serial error: {e}")
-            print("Retrying in 5 seconds...")
+            logger.error(f"Serial error: {e}")
+            logger.info("Retrying in 5 seconds...")
             with data_lock:
                 global_status["arduino_connected"] = False
             time.sleep(5)
         except Exception as e:
-            print(f"An unexpected error occurred: {e}")
+            logger.error(f"An unexpected error occurred: {e}")
             with data_lock:
                 global_status["arduino_connected"] = False
-            print("Retrying in 5 seconds...")
+            logger.info("Retrying in 5 seconds...")
             time.sleep(5)
 
 # --- Part 2: Web Server (Flask) ---
@@ -822,7 +865,7 @@ def home():
 @sock.route('/ws')
 def ws(ws):
     global global_clients
-    print("WebSocket client connected.")
+    logger.info("WebSocket client connected.")
     with data_lock:
         global_clients.append(ws)
     
@@ -835,25 +878,25 @@ def ws(ws):
             })
         ws.send(payload)
     except Exception as e:
-        print(f"Error on initial send to new client: {e}")
+        logger.error(f"Error on initial send to new client: {e}")
 
     try:
         while True:
             message = ws.receive(timeout=60)
     except Exception as e:
-        print(f"WebSocket client disconnected.")
+        logger.info(f"WebSocket client disconnected.")
     finally:
         with data_lock:
             if ws in global_clients:
                 global_clients.remove(ws)
-        print("Client removed from list.")
+        logger.info("Client removed from list.")
 
 if __name__ == "__main__":
     # 1. Find the GCS Receiver Arduino
     arduino_port = find_arduino_port()
     if not arduino_port:
-        print("Error: Could not find a GCS Receiver Arduino.")
-        print("Please check connection and ARDUINO_VID_PIDS list.")
+        logger.error("Could not find a GCS Receiver Arduino.")
+        logger.error("Please check connection and ARDUINO_VID_PIDS list.")
         with data_lock:
             global_status["port"] = "Not Found"
     else:
@@ -865,7 +908,16 @@ if __name__ == "__main__":
         reader.start()
 
     # 3. Start the Flask web server
-    print("\n--- SlugSight Ground Station Server (v10) ---")
-    print(f"Open this URL in your browser: http://127.0.0.1:5000")
-    print("---------------------------------------------")
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    logger.info("\n--- SlugSight Ground Station Server ---")
+    logger.info(f"Data logging to: {data_logger.get_current_file()}")
+    logger.info(f"Open this URL in your browser: http://127.0.0.1:5000")
+    logger.info("----------------------------------------")
+    
+    try:
+        app.run(host='0.0.0.0', port=5000, debug=False)
+    except KeyboardInterrupt:
+        logger.info("\nShutting down...")
+    finally:
+        # Close data logger on exit
+        data_logger.close()
+        logger.info("Ground station shutdown complete.")
