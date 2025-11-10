@@ -910,11 +910,11 @@ if __name__ == "__main__":
     # 3. Start the Flask web server
     logger.info("\n--- SlugSight Ground Station Server ---")
     logger.info(f"Data logging to: {data_logger.get_current_file()}")
-    logger.info(f"Open this URL in your browser: http://127.0.0.1:5000")
+    logger.info(f"Open this URL in your browser: http://127.0.0.1:8080")
     logger.info("----------------------------------------")
     
     try:
-        app.run(host='0.0.0.0', port=5000, debug=False)
+        app.run(host='0.0.0.0', port=8080, debug=False)
     except KeyboardInterrupt:
         logger.info("\nShutting down...")
     finally:
