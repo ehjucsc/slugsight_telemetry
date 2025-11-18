@@ -11,40 +11,40 @@
 ### 2. Start Ground Station
 ```bash
 cd gds
-python advanced_web_gui.py
+python slugsight_gds.py
 ```
 
 **Expected Output:**
 ```
-INFO - Data logging to: gds/flight_data/slugsight_20251109_120000.csv
+INFO - Data logging to: .../gds/flight_data/slugsight_20251109_120000.csv
 INFO - Found GCS Receiver on port: /dev/cu.usbserial-XXX
-INFO - Open this URL in your browser: http://127.0.0.1:5000
+INFO - Open this URL in your browser: [http://127.0.0.1:8080](http://127.0.0.1:8080)
 ```
 
 ### 3. Open Web Dashboard
-1. Open browser to: http://127.0.0.1:5000
+1. Open browser to: http://127.0.0.1:8080
 2. Verify "Connected" status (green indicator)
 3. Check data is updating (numbers changing)
 
 ### 4. Pre-Flight Checks
 - [ ] **Battery**: VBat > 3.7V (preferably > 4.0V)
 - [ ] **Signal**: RSSI > -100 dBm (closer to 0 is better)
-- [ ] **GPS**: Wait for GPS fix (may take 30-60 seconds)
+- [ ] **GPS**: Wait for GPS fix (may take 30-60 seconds, GREEN PPS light will flash on module)
 - [ ] **Sensors**: Altitude reading reasonable
 - [ ] **Data Logging**: Note CSV filename from terminal
 
 ## During Flight
 
 ### What to Watch
-1. **Status Indicator** - Should stay GREEN
+1. **Status Indicator** - Should stay blinking red (on the Feather)
 2. **RSSI** - Signal strength (will drop at altitude)
 3. **Altitude** - Real-time altitude
 4. **Max Altitude** - Tracks apogee
 5. **GPS** - Track rocket position
 
 ### If Connection Lost
-- Don't panic! Receiver keeps trying to reconnect
-- Data will resume when signal returns
+- Don't panic! Receiver will attempt to reconnect
+- Data flow will resume when signal returns
 - Check terminal for error messages
 
 ## Post-Flight
@@ -117,7 +117,7 @@ ls /dev/cu.*
 # List USB devices (Linux)
 ls /dev/ttyUSB* /dev/ttyACM*
 ```
-Update `ARDUINO_VID_PIDS` in `advanced_web_gui.py` if needed
+Update `ARDUINO_VID_PIDS` in `gds/slugsight_gds.py` if needed
 
 ### No Data Showing
 1. Check receiver serial monitor in Arduino IDE
@@ -157,6 +157,7 @@ At 10 Hz transmission rate:
 
 ### If Signal Lost
 - Receiver continues listening
+- Onboard SD card will continue to log data
 - Data will resume if signal returns
 - Check RSSI to estimate range
 
@@ -174,9 +175,8 @@ cp gds/flight_data/*.csv ~/rocket_backups/
 ## Contact Info
 
 For issues during flight prep:
-- Check `gds/README.md` for detailed troubleshooting
+- Check `docs/FLIGHT_DAY_GUIDE.md` for detailed troubleshooting
 - Check `README.md` for system overview
-- Review `CHANGES.md` for recent updates
 
 ## Success Checklist
 

@@ -13,7 +13,7 @@ This system consists of three main components:
 ### Data Flow
 
 ```
-Rocket (TX) → LoRa → Ground Receiver (RX) → USB → Computer (GDS) → CSV Files
+Rocket (TX) -> LoRa -> Ground Receiver (RX) -> USB -> Computer (GDS) -> CSV Files
 ```
 
 ## Hardware Components
@@ -52,18 +52,18 @@ The system transmits 17 fields from the rocket, and the receiver adds RSSI:
 
 ## Quick Start
 
-### 1. Upload Arduino Code
+### 1. Upload Firmware
 
 **Transmitter:**
 ```bash
-# Open slugsight_sensors_tx/slugsight_sensors_tx.ino in Arduino IDE
+# Open firmware/slugsight_tx/slugsight_tx.ino in Arduino IDE
 # Select board: Adafruit Feather M4 Express
 # Upload to rocket Feather M4
 ```
 
 **Receiver:**
 ```bash
-# Open slugsight_sensors_rx/slugsight_sensors_rx.ino in Arduino IDE
+# Open firmware/slugsight_rx/slugsight_rx.ino in Arduino IDE
 # Select board: Arduino Uno (or your receiver board)
 # Upload to receiver Arduino
 ```
@@ -79,10 +79,10 @@ pip install -r requirements.txt
 
 ```bash
 cd gds
-python advanced_web_gui.py
+python slugsight_gds.py
 ```
 
-Then open http://127.0.0.1:5000 in your web browser.
+Then open http://127.0.0.1:8080 in your web browser.
 
 ## Ground Station Features
 
@@ -110,13 +110,13 @@ timestamp,packet_count,Pitch,Roll,Yaw,Altitude,Velocity,Accel X,Accel Y,Accel Z,
 
 ## Configuration
 
-### Transmitter Settings (`slugsight_sensors_tx.ino`)
+### Transmitter Settings (`firmware/slugsight_tx/slugsight_tx.ino`)
 - **Frequency:** 915 MHz (US) - Change `RF95_FREQ` for your region
 - **Data Rate:** Bw500Cr45Sf128 (fastest)
 - **TX Power:** 23 dBm (max)
 - **Update Rate:** 10 Hz (100 Hz sensor fusion)
 
-### Ground Station Settings (`advanced_web_gui.py`)
+### Ground Station Settings (`gds/slugsight_gds.py`)
 - **Serial Baud:** 115200
 - **Output Directory:** `gds/flight_data/`
 - **CSV Precision:** 6 decimal places
@@ -160,19 +160,21 @@ print(f"Max G-Force: {max_g:.1f}g")
 
 ```
 slugsight_telemetry/
-├── README.md                          # This file
-├── slugsight_sensors_tx/              # Transmitter code (rocket)
-│   └── slugsight_sensors_tx.ino      # Arduino code for TX
-├── slugsight_sensors_rx/              # Receiver code (ground)
-│   └── slugsight_sensors_rx.ino      # Arduino code for RX
-└── gds/                               # Ground station software
-    ├── README.md                      # GDS documentation
-    ├── requirements.txt               # Python dependencies
-    ├── advanced_web_gui.py            # Main ground station app
-    ├── telemetry_parser.py            # CSV parser
-    ├── data_logger.py                 # Data logging
-    ├── test_integration.py            # Test script
-    └── flight_data/                   # Logged flight data (created automatically)
+|-- README.md                      # This file
+|-- .gitignore                     # Git configuration
+|-- docs/                          # Documentation
+|   `-- FLIGHT_DAY_GUIDE.md        # Operational guide
+|-- firmware/                      # Arduino Code
+|   |-- slugsight_tx/              # Transmitter code (rocket)
+|   `-- slugsight_rx/              # Receiver code (ground)
+`-- gds/                           # Ground Data System (Python)
+    |-- flight_data/               # Logged flight data (created automatically)
+    |-- templates/                 # Web dashboard HTML
+    |   `-- index.html
+    |-- slugsight_gds.py           # Main application
+    |-- telemetry_parser.py        # CSV parser module
+    |-- data_logger.py             # Data logging module
+    `-- requirements.txt           # Python dependencies
 ```
 
 ## Troubleshooting
@@ -180,7 +182,7 @@ slugsight_telemetry/
 ### No Serial Port Found
 - Check USB connection
 - Verify Arduino drivers installed
-- Update `ARDUINO_VID_PIDS` in `advanced_web_gui.py`
+- Update `ARDUINO_VID_PIDS` in `gds/slugsight_gds.py`
 
 ### No Data Received
 - Check receiver Arduino serial monitor (should show CSV data)
@@ -190,7 +192,7 @@ slugsight_telemetry/
 
 ### Web Dashboard Not Loading
 - Check Flask is installed: `pip install flask flask-sock`
-- Verify port 5000 is not in use
+- Verify port 8080 is not in use
 - Check browser console for errors
 
 ### GPS Not Getting Fix
@@ -202,7 +204,7 @@ slugsight_telemetry/
 
 ⚠️ **Important Safety Information:**
 
-1. **Radio Regulations** - Verify 915 MHz ISM band is legal in your region
+1. **Radio Regulations** - Verify 915 MHz ISM (USA) band is legal in your region
 2. **Flight Safety** - Follow all NAR/TRA safety codes
 3. **Range Testing** - Test LoRa range before flight
 4. **Backup Systems** - Always use backup recovery systems

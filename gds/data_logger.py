@@ -23,7 +23,8 @@ class DataLogger:
             config: Data logging configuration dictionary
         """
         self.config = config
-        self.output_dir = Path(config.get('output_directory', './data/flights'))
+        # Updated: Relies on path passed from main script, falls back safely
+        self.output_dir = Path(config.get('output_directory', './flight_data'))
         self.csv_file = None
         self.csv_writer = None
         self.current_filename = None
@@ -42,7 +43,7 @@ class DataLogger:
         filename_format = self.config.get('filename_format', '%Y-%m-%d_%H-%M-%S')
         filename_base = timestamp.strftime(filename_format)
         
-        self.current_filename = self.output_dir / f"{filename_base}.csv"
+        self.current_filename = self.output_dir / f"slugsight_{filename_base}.csv"
         # Open with explicit encoding for broader compatibility
         self.csv_file = open(self.current_filename, 'w', newline='', encoding='utf-8')
         self.csv_writer = None  # Will be created when we know the fields
@@ -113,47 +114,13 @@ class DataLogger:
     
     def close(self):
         """Close CSV file and flush remaining data"""
-        logger.info(f"Closing log file: {self.current_filename}")
+        if self.current_filename:
+            logger.info(f"Closing log file: {self.current_filename}")
         
         if self.csv_file:
             self.csv_file.flush()
             self.csv_file.close()
-        
-        logger.info(f"Data saved to: {self.current_filename}")
     
     def get_current_file(self) -> str:
         """Get path to current log file"""
         return str(self.current_filename) if self.current_filename else ""
-
-# Example usage
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    
-    # Test configuration
-    test_config = {
-        'output_directory': './test_data',
-        'filename_format': '%Y-%m-%d_%H-%M-%S',
-        'auto_create_directory': True,
-        'csv': {
-            'delimiter': ',',
-            'include_header': True,
-            'float_precision': 3
-        },
-        'buffer_size': 5
-    }
-    
-    logger_instance = DataLogger(test_config)
-    
-    # Write some test data
-    for i in range(10):
-        test_telemetry = {
-            'timestamp': i * 0.1,
-            'altitude': 100.0 + i * 10,
-            'pressure': 101325.0,
-            'temperature': 20.5,
-            'state': 'BOOST'
-        }
-        logger_instance.write(test_telemetry)
-    
-    logger_instance.close()
-    print(f"Test data written to: {logger_instance.get_current_file()}")

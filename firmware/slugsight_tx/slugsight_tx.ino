@@ -1,8 +1,10 @@
 /*
- * SlugSight FEATHER M4 - LORA TRANSMITTER (v11 - LED Heartbeat)
+ * SlugSight FEATHER M4 - LORA TRANSMITTER (v17 - Flight Ready)
  *
- * - Adds a blink to the built-in RED LED (pin 13)
- * on every successful LoRa packet transmission.
+ * - Uses a Software RTC (RTC_Millis) for timestamping.
+ * - TIME SOURCE: Defaults to GPS (false) for actual flights to ensure valid UTC time.
+ * - Logs to an external SD card on pin D13.
+ * - Transmits 17-point telemetry packet via LoRa.
  */
 
 // --- Includes ---
@@ -14,6 +16,26 @@
 #include <Adafruit_BMP280.h>
 #include <Adafruit_GPS.h>
 #include <Adafruit_AHRS.h>
+#include <SD.h>      // For SD Card
+#include <Wire.h>    // Required by RTClib
+#include "RTClib.h"  // For Software RTC
+
+// --- TIME SOURCE TOGGLE ---
+// true = Use Software RTC (set to compile time, boots fast).
+// false = Use GPS for time (must wait for fix on boot).
+// WARNING: Set to FALSE for actual flights!
+const bool USE_SOFTWARE_RTC = false; 
+// --------------------------
+
+// --- RTC Object ---
+RTC_Millis rtc; // Use the software RTC
+bool rtc_ready = false;
+
+// --- SD Card Setup ---
+const int SD_CS_PIN = 13; // Using D13 for external SD module
+const char* FILENAME_BASE = "LOG";
+File logFile;
+char log_filename[15];
 
 // --- LoRa Setup ---
 #define RFM95_CS   10
@@ -63,11 +85,80 @@ float vbat = 0.0;
 float altitude_old = 0.0;
 unsigned long vel_time_old = 0;
 
+
+void initializeSDCard(DateTime log_time) {
+  Serial.print("Initializing SD card (CS Pin ");
+  Serial.print(SD_CS_PIN);
+  Serial.println(")...");
+
+  if (!SD.begin(SD_CS_PIN)) {
+    Serial.println("Card failed, or not present!");
+    Serial.println("Check card formatting (FAT16/FAT32).");
+    while (1) { // Halt with blinking LED
+        digitalWrite(LED_BUILTIN, HIGH); delay(100);
+        digitalWrite(LED_BUILTIN, LOW);
+        delay(100);
+    }
+  }
+  Serial.println("SD card initialized.");
+
+  // --- Find Next Available Filename ---
+  sprintf(log_filename, "%s00.CSV", FILENAME_BASE);
+  for (uint8_t i = 0; i < 100; i++) {
+    log_filename[strlen(FILENAME_BASE)] = i / 10 + '0';
+    log_filename[strlen(FILENAME_BASE) + 1] = i % 10 + '0';
+    
+    if (!SD.exists(log_filename)) {
+      break;
+    }
+    
+    if (i == 99) {
+      Serial.println("Could not find an available filename (0-99).");
+      while (1) delay(10);
+    }
+  }
+
+  Serial.print("Creating new file: ");
+  Serial.println(log_filename);
+
+  // --- Open File and Write Header ---
+  logFile = SD.open(log_filename, FILE_WRITE);
+  if (logFile) {
+    Serial.println("Writing file header...");
+    
+    logFile.println("--- SlugSight Telemetry Log ---");
+    logFile.print("File Created (");
+    logFile.print(USE_SOFTWARE_RTC ? "RTC" : "GPS");
+    logFile.print("): ");
+    logFile.print(log_time.year(), DEC); logFile.print("/");
+    logFile.print(log_time.month(), DEC); logFile.print("/");
+    logFile.print(log_time.day(), DEC); logFile.print(" ");
+    logFile.print(log_time.hour(), DEC); logFile.print(":");
+    logFile.print(log_time.minute(), DEC); logFile.print(":");
+    logFile.println(log_time.second(), DEC);
+    
+    logFile.print("File Name: ");
+    logFile.println(log_filename);
+    logFile.println("---------------------------------");
+    logFile.println("Timestamp,Pitch,Roll,Yaw,Altitude,Velocity,Accel X,Accel Y,Accel Z,Pressure Pa,IMU Temp C,GPS Fix,GPS Sats,GPS Lat,GPS Lon,GPS Alt m,GPS Speed m/s,VBat");
+    
+    logFile.flush();
+    // Save header
+    Serial.println("Header written. SD Logging is active.");
+  } else {
+    Serial.print("Error opening ");
+    Serial.println(log_filename);
+    while(1); // Halt
+  }
+}
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("SlugSight LoRa Transmitter (v11 - LED Heartbeat)... Booting.");
+  unsigned long setup_start = millis();
+  while (!Serial && (millis() - setup_start < 2000));
 
-  // --- Initialize LED Pin ---
+  Serial.println("SlugSight LoRa Transmitter (v17 - Flight Ready)... Booting.");
+
   pinMode(LED_BUILTIN, OUTPUT);
   digitalWrite(LED_BUILTIN, LOW);
 
@@ -82,6 +173,7 @@ void setup() {
     while (1);
   }
   Serial.println("LoRa radio init OK!");
+
   if (!rf95.setFrequency(RF95_FREQ)) {
     Serial.println("setFrequency failed");
     while (1);
@@ -92,7 +184,6 @@ void setup() {
 
   // --- Initialize SPI Sensors ---
   Serial.println("Initializing SPI sensors...");
-  
   if (!sox.begin_SPI(LSM_CS)) {
     Serial.println("Failed to find LSM6DSOX chip! Check wiring.");
     while (1);
@@ -111,7 +202,6 @@ void setup() {
   }
   Serial.println("BMP280 (SPI) Found!");
 
-
   // --- Configure Sensors ---
   sox.setAccelRange(LSM6DS_ACCEL_RANGE_16_G);
   sox.setGyroRange(LSM6DS_GYRO_RANGE_2000_DPS);
@@ -123,22 +213,41 @@ void setup() {
 
   // --- Initialize GPS at 115200 ---
   Serial.println("Initializing GPS...");
-  GPS.begin(9600); // Start at the default 9600 baud
-  
-  // Send command to switch GPS module to 115200
+  GPS.begin(9600);
   Serial.println("Setting GPS baud rate to 115200...");
   GPS.sendCommand("PMTK251,115200");
-  
-  // Re-init Serial1 at new speed
   GPS_SERIAL.end();
   GPS_SERIAL.begin(115200);
-
-  // Configure GPS to send RMC and GGA
   GPS.sendCommand("PMTK314,0,1,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
-  // Set update rate to 5 Hz
   GPS.sendCommand("PMTK220,200"); 
-  delay(1000); // Give GPS time to process commands
   Serial.println("GPS Initialized at 115200.");
+  
+  // --- Initialize Time Source ---
+  DateTime log_time;
+  if (USE_SOFTWARE_RTC) {
+    Serial.println("Using Software RTC. Setting time to compile time.");
+    // Initialize the software RTC to the time this sketch was compiled
+    rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
+    log_time = rtc.now();
+    rtc_ready = true;
+  } else {
+    Serial.println("Using GPS Time. Waiting for GPS fix to get time for SD log...");
+    
+    while (!GPS.fix || GPS.year < 20) {
+      GPS.read();
+      if (GPS.newNMEAreceived()) {
+          GPS.parse(GPS.lastNMEA());
+      }
+      Serial.print(".");
+      digitalWrite(LED_BUILTIN, HIGH); delay(100);
+      digitalWrite(LED_BUILTIN, LOW); delay(400);
+    }
+    Serial.println(" GPS FIX ACQUIRED!");
+    log_time = DateTime(2000 + GPS.year, GPS.month, GPS.day, GPS.hour, GPS.minute, GPS.seconds);
+  }
+
+  // --- Initialize SD Card (now that we have time) ---
+  initializeSDCard(log_time);
 
   // --- Initialize Fusion Filter ---
   filter.begin(FILTER_UPDATE_RATE_HZ);
@@ -150,13 +259,11 @@ void setup() {
 
 void loop() {
   
-  // 1. Read GPS
   GPS.read();
 
-  // 2. Update Fusion Filter
+  // --- Sensor Fusion Update Loop ---
   if (millis() - last_filter_update >= (1000 / FILTER_UPDATE_RATE_HZ)) {
     last_filter_update = millis();
-    
     sensors_event_t accel, gyro, temp_imu, mag;
     sox.getEvent(&accel, &gyro, &temp_imu);
     lis3mdl.getEvent(&mag);
@@ -164,7 +271,7 @@ void loop() {
     filter.update(gyro.gyro.x, gyro.gyro.y, gyro.gyro.z,
                   accel.acceleration.x, accel.acceleration.y, accel.acceleration.z,
                   mag.magnetic.x, mag.magnetic.y, mag.magnetic.z);
-    
+
     pitch = filter.getPitch();
     roll  = filter.getRoll();
     yaw   = filter.getYaw();
@@ -175,14 +282,10 @@ void loop() {
     accel_z_g = accel.acceleration.z / SENSORS_GRAVITY_STANDARD;
   }
 
-  // 3. Parse, Format, and Send
+  // --- Telemetry Transmission Loop ---
   if (millis() - last_send_time >= (1000 / LORA_SEND_RATE_HZ)) {
     last_send_time = millis();
-    
-    // --- Turn LED ON during packet creation/send ---
-    digitalWrite(LED_BUILTIN, HIGH);
 
-    // 3a. GPS
     if (GPS.newNMEAreceived()) {
       if (GPS.parse(GPS.lastNMEA())) {
         gps_fix = (int)GPS.fix;
@@ -191,16 +294,14 @@ void loop() {
           gps_latitude = GPS.latitudeDegrees;
           gps_longitude = GPS.longitudeDegrees;
           gps_altitude_m = GPS.altitude;
-          gps_speed_mps = GPS.speed * 0.514444; // knots to m/s
+          gps_speed_mps = GPS.speed * 0.514444;
         }
       }
     }
 
-    // 3b. Barometer
     bmp_pressure_pa = bmp.readPressure();
     fused_altitude_m = bmp.readAltitude(SEA_LEVEL_PRESSURE_HPA);
-
-    // 3c. Velocity
+    
     float dt = (millis() - vel_time_old) / 1000.0;
     if (dt > 0.001) {
       vertical_velocity_mps = (fused_altitude_m - altitude_old) / dt;
@@ -208,13 +309,12 @@ void loop() {
       vel_time_old = millis();
     }
 
-    // 3d. Battery
     vbat = analogRead(VBATPIN);
-    vbat *= 2.0;    // reverse the 1:1 voltage divider
-    vbat *= 3.3;    // multiply by 3.3V reference
-    vbat /= 4095.0; // convert to voltage (12-bit ADC)
+    vbat *= 2.0;
+    vbat *= 3.3;
+    vbat /= 1024.0;
 
-    // 3e. Build the 17-point CSV String
+    // --- Build the 17-point CSV String ---
     String csvData = "";
     csvData += String(pitch, 2);                   // 1
     csvData += ",";
@@ -250,15 +350,33 @@ void loop() {
     csvData += ",";
     csvData += String(vbat, 2);                    // 17
 
-    // 3f. Send over LoRa
-    
+    // --- 1. Send over LoRa ---
     char txBuffer[250];
     csvData.toCharArray(txBuffer, 250);
-    
     rf95.send((uint8_t *)txBuffer, strlen(txBuffer));
+    
+    // --- 2. Log to SD Card ---
+    if (logFile) {
+      char timestamp[35];
+      if (USE_SOFTWARE_RTC && rtc_ready) {
+        // Get time from Software RTC
+        DateTime now = rtc.now();
+        sprintf(timestamp, "%02d/%02d/%04d %02d:%02d:%02d.000",
+                now.month(), now.day(), now.year(),
+                now.hour(), now.minute(), now.second());
+      } else {
+        // Get time from GPS
+        sprintf(timestamp, "%02d/%02d/%04d %02d:%02d:%02d.%03d",
+                GPS.month, GPS.day, 2000 + GPS.year,
+                GPS.hour, GPS.minute, GPS.seconds, GPS.milliseconds);
+      }
+              
+      logFile.print(timestamp);
+      logFile.print(",");
+      logFile.println(csvData);
+      logFile.flush();
+    }
+    
     rf95.waitPacketSent();
-
-    // --- Turn LED OFF after send is complete ---
-    digitalWrite(LED_BUILTIN, LOW);
   }
 }
