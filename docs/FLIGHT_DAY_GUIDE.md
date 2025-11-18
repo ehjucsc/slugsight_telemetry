@@ -11,6 +11,13 @@
 ### 2. Start Ground Station
 ```bash
 cd gds
+
+# Activate venv (macOS/Linux)
+source venv/bin/activate
+
+# Activate venv (Windows PowerShell)
+.\venv\Scripts\Activate.ps1
+
 python slugsight_gds.py
 ```
 
@@ -29,22 +36,22 @@ INFO - Open this URL in your browser: [http://127.0.0.1:8080](http://127.0.0.1:8
 ### 4. Pre-Flight Checks
 - [ ] **Battery**: VBat > 3.7V (preferably > 4.0V)
 - [ ] **Signal**: RSSI > -100 dBm (closer to 0 is better)
-- [ ] **GPS**: Wait for GPS fix (may take 30-60 seconds, GREEN PPS light will flash on module)
+- [ ] **GPS**: Wait for GPS fix (may take 30-60 seconds)
 - [ ] **Sensors**: Altitude reading reasonable
 - [ ] **Data Logging**: Note CSV filename from terminal
 
 ## During Flight
 
 ### What to Watch
-1. **Status Indicator** - Should stay blinking red (on the Feather)
+1. **Status Indicator** - Should stay GREEN
 2. **RSSI** - Signal strength (will drop at altitude)
 3. **Altitude** - Real-time altitude
 4. **Max Altitude** - Tracks apogee
 5. **GPS** - Track rocket position
 
 ### If Connection Lost
-- Don't panic! Receiver will attempt to reconnect
-- Data flow will resume when signal returns
+- Don't panic! Receiver keeps trying to reconnect
+- Data will resume when signal returns
 - Check terminal for error messages
 
 ## Post-Flight
@@ -52,17 +59,18 @@ INFO - Open this URL in your browser: [http://127.0.0.1:8080](http://127.0.0.1:8
 ### 1. Verify Data Saved
 ```bash
 ls -lh gds/flight_data/
+# On Windows: dir gds\flight_data\
 ```
 
 Should show your flight CSV file with size > 0 bytes
 
 ### 2. Quick Data Check
 ```bash
-# View first 10 rows
+# View first 10 rows (macOS/Linux)
 head -10 gds/flight_data/slugsight_YYYYMMDD_HHMMSS.csv
 
-# Count packets received
-wc -l gds/flight_data/slugsight_YYYYMMDD_HHMMSS.csv
+# View first 10 rows (Windows PowerShell)
+Get-Content gds/flight_data/slugsight_YYYYMMDD_HHMMSS.csv -Head 10
 ```
 
 ### 3. Shutdown Ground Station
@@ -110,14 +118,21 @@ plt.show()
 ## Troubleshooting
 
 ### "Could not find GCS Receiver"
+**1. macOS/Linux:**
 ```bash
-# List USB devices (macOS)
 ls /dev/cu.*
-
-# List USB devices (Linux)
 ls /dev/ttyUSB* /dev/ttyACM*
 ```
-Update `ARDUINO_VID_PIDS` in `gds/slugsight_gds.py` if needed
+
+**2. Windows:**
+- Open Device Manager > Ports (COM & LPT)
+- Look for "USB Serial Device" or "Arduino"
+- Or run this Python command to list all ports:
+```bash
+python -m serial.tools.list_ports
+```
+
+Update `ARDUINO_VID_PIDS` in `gds/slugsight_gds.py` if needed.
 
 ### No Data Showing
 1. Check receiver serial monitor in Arduino IDE
@@ -157,7 +172,6 @@ At 10 Hz transmission rate:
 
 ### If Signal Lost
 - Receiver continues listening
-- Onboard SD card will continue to log data
 - Data will resume if signal returns
 - Check RSSI to estimate range
 

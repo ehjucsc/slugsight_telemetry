@@ -70,8 +70,23 @@ The system transmits 17 fields from the rocket, and the receiver adds RSSI:
 
 ### 2. Install Ground Station Software
 
+It is recommended to use a virtual environment:
+
 ```bash
 cd gds
+
+# Create virtual environment
+python -m venv venv
+
+# Activate (macOS/Linux)
+source venv/bin/activate
+
+# Activate (Windows PowerShell)
+.\venv\Scripts\Activate.ps1
+# OR (Windows CMD)
+venv\Scripts\activate.bat
+
+# Install dependencies
 pip install -r requirements.txt
 ```
 
@@ -79,6 +94,8 @@ pip install -r requirements.txt
 
 ```bash
 cd gds
+
+# Ensure venv is active (see above)
 python slugsight_gds.py
 ```
 
@@ -204,7 +221,7 @@ slugsight_telemetry/
 
 ⚠️ **Important Safety Information:**
 
-1. **Radio Regulations** - Verify 915 MHz ISM (USA) band is legal in your region
+1. **Radio Regulations** - Verify 915 MHz ISM band is legal in your region
 2. **Flight Safety** - Follow all NAR/TRA safety codes
 3. **Range Testing** - Test LoRa range before flight
 4. **Backup Systems** - Always use backup recovery systems
