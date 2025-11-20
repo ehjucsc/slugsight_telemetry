@@ -1,34 +1,40 @@
 # SlugSight Telemetry System
 
-Complete rocket telemetry system with LoRa transmission, ground station, and data logging for rocket flight data acquisition.
+Complete rocket telemetry system with LoRa transmission, ground station, and dual-redundant data logging for rocket flight data acquisition.
 
 ## System Overview
 
 This system consists of three main components:
 
-1. **Transmitter (TX)** - Arduino/Feather M4 on the rocket
-2. **Receiver (RX)** - Arduino receiver at ground station
-3. **Ground Station Software (GDS)** - Python software for visualization and data logging
+1. **Transmitter (TX)** - Arduino/Feather M4 on the rocket (collects data, logs to SD, transmits via LoRa)
+2. **Receiver (RX)** - Arduino receiver at ground station (receives LoRa, forwards to USB)
+3. **Ground Station Software (GDS)** - Python software for real-time visualization and recording
 
 ### Data Flow
 
 ```
-Rocket (TX) -> LoRa -> Ground Receiver (RX) -> USB -> Computer (GDS) -> CSV Files
+        [ROCKET]                                      [GROUND]
+Sensors -> TX CPU -> SD Card (Backup Log)      RX Radio -> USB -> Python GDS -> CSV File (Primary Log)
+             |                                     ^
+             |                                     |
+        LoRa Radio ------------------------> LoRa Radio
 ```
 
 ## Hardware Components
 
 ### Transmitter (On Rocket)
-- Adafruit Feather M4 Express
-- RFM95W LoRa Radio (915 MHz)
-- LSM6DSOX IMU (accelerometer/gyroscope)
-- LIS3MDL Magnetometer
-- BMP280 Barometer
-- GPS Module (115200 baud)
+- **Microcontroller:** Adafruit Feather M4 Express
+- **Radio:** RFM95W LoRa Radio (915 MHz)
+- **Storage:** Micro SD Card Module (CS Pin 13) - *Provides onboard redundancy*
+- **Sensors:**
+  - LSM6DSOX IMU (Accelerometer/Gyroscope)
+  - LIS3MDL Magnetometer
+  - BMP280 Barometer
+  - GPS Module (115200 baud)
 
 ### Receiver (Ground Station)
-- Arduino Uno/Nano (or compatible)
-- RFM95W LoRa Radio (915 MHz)
+- **Microcontroller:** Arduino Uno/Nano (or compatible)
+- **Radio:** RFM95W LoRa Radio (915 MHz)
 
 ## Telemetry Data (18 Fields)
 
@@ -36,7 +42,7 @@ The system transmits 17 fields from the rocket, and the receiver adds RSSI:
 
 | # | Field | Unit | Description |
 |---|-------|------|-------------|
-| 1-3 | Pitch, Roll, Yaw | degrees | Orientation angles |
+| 1-3 | Pitch, Roll, Yaw | degrees | Orientation angles (Sensor Fusion) |
 | 4 | Altitude | meters | Barometric altitude (MSL) |
 | 5 | Velocity | m/s | Vertical velocity |
 | 6-8 | Accel X, Y, Z | g | 3-axis acceleration |
@@ -94,8 +100,7 @@ pip install -r requirements.txt
 
 ```bash
 cd gds
-
-# Ensure venv is active (see above)
+source venv/bin/activate  # Ensure venv is active
 python slugsight_gds.py
 ```
 
@@ -109,16 +114,22 @@ Then open http://127.0.0.1:8080 in your web browser.
 - **GPS Tracking** - GPS position and fix status
 - **Battery Monitoring** - Battery voltage and percentage
 - **Signal Quality** - RSSI monitoring
-- **Attitude Display** - Pitch, roll, yaw gauges
-- **Time-series Charts** - Historical data plots
 
-## Data Logging
+## Data Logging & Redundancy
 
-All telemetry is automatically saved to CSV files in the `gds/flight_data/` directory.
+This system implements a **Dual-Redundant** logging strategy to ensure no flight data is lost:
 
-**Filename format:** `slugsight_YYYYMMDD_HHMMSS.csv`
+### 1. Ground Recording (Primary)
+The Ground Station software automatically saves all received telemetry packets to CSV files on your laptop.
+- **Location:** `gds/flight_data/`
+- **Filename:** `slugsight_YYYYMMDD_HHMMSS.csv`
 
-**CSV Format:**
+### 2. Onboard SD Card (Backup)
+The transmitter (TX) writes every data packet to an onboard Micro SD card **before** transmission. This creates a complete, high-fidelity log of the flight even if the radio link cuts out or the ground station fails.
+- **Location:** Root of SD card
+- **Filename:** `LOGxx.CSV` (increments automatically)
+
+**CSV Format (Both Logs):**
 ```csv
 timestamp,packet_count,Pitch,Roll,Yaw,Altitude,Velocity,Accel X,Accel Y,Accel Z,Pressure Pa,IMU Temp C,GPS Fix,GPS Sats,GPS Lat,GPS Lon,GPS Alt m,GPS Speed m/s,VBat,RSSI
 2025-11-09T12:00:00.123,0,5.2,-3.1,45.8,125.5,15.3,0.5,0.2,9.8,101325.0,22.5,1,8,37.123456,-122.345678,130.2,12.5,3.85,-95
@@ -179,15 +190,16 @@ print(f"Max G-Force: {max_g:.1f}g")
 slugsight_telemetry/
 |-- README.md                      # This file
 |-- .gitignore                     # Git configuration
+|-- LICENSE-FIRMWARE               # GPLv3 License for Firmware
+|-- LICENSE-SOFTWARE               # MIT License for GDS
 |-- docs/                          # Documentation
 |   `-- FLIGHT_DAY_GUIDE.md        # Operational guide
-|-- firmware/                      # Arduino Code
+|-- firmware/                      # Arduino Code (GPLv3)
 |   |-- slugsight_tx/              # Transmitter code (rocket)
 |   `-- slugsight_rx/              # Receiver code (ground)
-`-- gds/                           # Ground Data System (Python)
-    |-- flight_data/               # Logged flight data (created automatically)
+`-- gds/                           # Ground Data System (Python - MIT)
+    |-- flight_data/               # Logged flight data
     |-- templates/                 # Web dashboard HTML
-    |   `-- index.html
     |-- slugsight_gds.py           # Main application
     |-- telemetry_parser.py        # CSV parser module
     |-- data_logger.py             # Data logging module
@@ -196,40 +208,16 @@ slugsight_telemetry/
 
 ## Troubleshooting
 
-### No Serial Port Found
-- Check USB connection
-- Verify Arduino drivers installed
-- Update `ARDUINO_VID_PIDS` in `gds/slugsight_gds.py`
-
-### No Data Received
-- Check receiver Arduino serial monitor (should show CSV data)
-- Verify baud rate is 115200
-- Check LoRa antenna connections
-- Verify transmitter is powered on
-
-### Web Dashboard Not Loading
-- Check Flask is installed: `pip install flask flask-sock`
-- Verify port 8080 is not in use
-- Check browser console for errors
-
-### GPS Not Getting Fix
-- Ensure clear view of sky
-- GPS can take 30-60 seconds for initial fix
-- Check GPS antenna connection
-
-## Safety Notes
-
-⚠️ **Important Safety Information:**
-
-1. **Radio Regulations** - Verify 915 MHz ISM band is legal in your region
-2. **Flight Safety** - Follow all NAR/TRA safety codes
-3. **Range Testing** - Test LoRa range before flight
-4. **Backup Systems** - Always use backup recovery systems
-5. **Battery Safety** - Monitor LiPo battery voltage
+See `docs/FLIGHT_DAY_GUIDE.md` for detailed troubleshooting steps.
 
 ## License
 
-MIT License - See individual files for details
+This project is dual-licensed:
+
+1. **Firmware (`firmware/`)**: The Arduino transmitter and receiver code is licensed under the **GPLv3** (GNU General Public License v3.0) to comply with the RadioHead library dependency.
+2. **Ground Station (`gds/`)**: The Python ground station software and documentation are licensed under the **MIT License**.
+
+See `LICENSE-FIRMWARE` and `LICENSE-SOFTWARE` for full details.
 
 ## Support
 
