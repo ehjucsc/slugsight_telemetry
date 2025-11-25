@@ -13,11 +13,36 @@ This system consists of three main components:
 ### Data Flow
 
 ```
-        [ROCKET]                                      [GROUND]
-Sensors -> TX CPU -> SD Card (Backup Log)      RX Radio -> USB -> Python GDS -> CSV File (Primary Log)
-             |
-             |
-        LoRa Radio ------------------------> LoRa Radio
+ROCKET HARDWARE (SPI BUS & UART RX)
+ ┌────────────────────────────────────────────────────────────────────────┐
+ │                                                                        │
+ │   [GPS Module]                                                         │
+ │        |                                                               │
+ │      (UART)                                                            │
+ │        |                                                               │
+ │        v                                    (SPI Data Bus)             │
+ │     [TX CPU] <==+===========+===========+===========+===========+      │
+ │     (Master)    |           |           |           |           |      │
+ │                 |           |           |           |           |      │
+ │                 v           v           v           v           v      │
+ │              [IMU]        [Mag]       [Baro]    [SD Card]    [Radio]   │
+ │           (Accel/Gyro)                                      (LoRa TX)  │
+ │                                                                 :      │
+ └─────────────────────────────────────────────────────────────────:──────┘
+                                                                   :
+                                                        (915 MHz LoRa Link)
+                                                                   :
+  GROUND STATION                                                   :
+ ┌─────────────────────────────────────────────────────────────────:──────┐
+ │                                                                 v      │
+ │                                                              [Radio]   │
+ │                                                             (LoRa RX)  │
+ │                                                                 |      │
+ │                                                               (SPI)    │
+ │                                                                 |      │
+ │   [CSV File] <--(Write)-- [Python GDS] <--(Serial/USB)-- [RX Arduino]  │
+ │                                                                        │
+ └────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Hardware Components & Wiring
