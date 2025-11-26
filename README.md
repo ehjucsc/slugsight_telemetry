@@ -13,39 +13,36 @@ This system consists of three main components:
 ### Data Flow
 
 ```
-ROCKET HARDWARE (SPI BUS & UART)
- ┌────────────────────────────────────────────────────────────────────────────────────────────────┐
- │                                                                                                │
- │    [Reyax RYS352A]                                                                             │
- │     (GPS Module)                                                                               │
- │           |                                                                                    │
- │         (UART)                                                                                 │
- │           |                                                                                    │
- │           v                                   (SPI Data Bus)                                   │
- │   [Feather M4 Express] <===+============+===============+==============+==============+        │
- │      (Master CPU)          ^            ^               ^              v              v        │
- │                            |            |               |              |              |        │
- │                            |            |               |              |              |        │
- │                        [LSM6DSOX]    [LIS3MDL]       [BMP280]      [SD Card]    [RFM9x LoRa]   │
- │                       (Accel/Gyro) (Magnetometer)  (Barometer)    (Secondary)       (TX)       │
- │                                                                    (CSV Log)          :        │
- └───────────────────────────────────────────────────────────────────────────────────────:────────┘
-                                                                                         :
-                                                                                (915 MHz LoRa Link)
-                                                                                         :
-  GROUND STATION                                                                         :
- ┌───────────────────────────────────────────────────────────────────────────────────────:────────┐
- │                                                                                       v        │
- │                                                                                 [RFM9x LoRa]   │
- │                                                                                     (RX)       │
- │                                                                                       |        │
- │                                                                                     (SPI)      │
- │                                                                                       |        │
- │                                                                                       v        │
- │   [CSV File] <──(Write)── [Python GDS] <──(Serial/USB)── [Arduino Uno R3] <───────────+        │
- │  (Primary Log)                                             (Ground MCU)                        │
- │                                                                                                │
- └────────────────────────────────────────────────────────────────────────────────────────────────┘
+ROCKET HARDWARE (SPI & UART)
+┌─────────────────────────────────────────────────────────────────────────┐
+│ [Reyax RYS352A]                                                         │
+│ (GPS Module)                                                            │
+│       |                  [LSM6DSOX]             [SD Card]               |
+│     (UART)              (Accel/Gyro)           (Backup Log)             |
+│       |                      |                      |                   │
+│       v                      v    (SPI Data Bus)    ^                   │
+│ [Feather M4 Express] <==+====+===========+==========+========+          │
+│ (Rocket MCU)            ^                ^                   v          │
+│                         |                |                   |          │
+│                     [BMP280]         [LIS3MDL]          [RFM9x LoRa]    │
+│                    (Barometer)     (Magnetometer)           (TX)        |
+│                                                              │          |
+└──────────────────────────────────────────────────────────────:──────────┘
+                                                               :
+                                                      (915 MHz LoRa Link)
+ GROUND STATION                                                :
+┌──────────────────────────────────────────────────────────────:──────────┐
+│                                                              v          │
+│                                                         [RFM9x LoRa]    │
+│                                                             (RX)        │
+│                                                              |          │
+│                                                            (SPI)        │
+│                                                              |          │
+│                                                              v          │
+│ [CSV File] <──(Write)── [Python GDS] <──(Serial/USB)── [Arduino Uno R3] │
+│ (Primary Log)           (Software)                     (Ground MCU)     │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Hardware Components & Wiring
